@@ -42,14 +42,6 @@ def list_of_ints(arg):
 
     return result
 
-def list_of_ints_nonnegative(arg):
-    """Split a comma-separated string into a list of non-negative integers."""
-    result = list_of_ints(arg)
-    for x in result:
-        if x < 0:
-            raise argparse.ArgumentTypeError(f"negative integer not allowed: {x}")
-    return result
-
 def to_dict(arg):
     """Split a comma-separated string into a dictionary of key-value pairs."""
     return dict(item.split("=") for item in arg.split(","))
@@ -376,7 +368,7 @@ def parse_cli_args():
         "-ce",
         "--custom_env_vars",
         type=to_dict,
-     [<35;169;36M   help="Comma separated string of environment variables",
+        help="Comma separated string of environment variables",
         default=[],
     )
     slurm_args.add_argument(
@@ -506,8 +498,8 @@ def parse_cli_args():
     )
     performance_args.add_argument(
         "--profiling_ranks",
-        type=list_of_ints_nonnegative,
-        helpt="List of ranks to target for profiling (defaults to just first rank)"
+        type=list_of_ints,
+        help="List of ranks to target for profiling (defaults to just first rank)",
         required=False,
         default=None
     )
