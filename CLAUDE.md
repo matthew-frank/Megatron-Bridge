@@ -4,7 +4,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-NeMo Megatron Bridge is a PyTorch-native library that provides a **bridge between HuggingFace Transformers and Megatron Core**, enabling bidirectional checkpoint conversion and high-performance distributed training for LLMs and VLMs. It supports 20+ model families with built-in recipes for pretraining, SFT, and LoRA finetuning.
+Megatron Bridge is a **distributed training framework** that uses HuggingFace as its checkpoint interchange format and Megatron Core as its distributed execution backend. The "bridge" is the entry/exit point—conversion utilities that let you start from any HuggingFace checkpoint, train at scale with Megatron Core's parallelism primitives, and export back to HuggingFace format.
+
+**Core value proposition:**
+- **Recipes**: Production-ready training configs encoding NVIDIA's optimization expertise
+- **Training orchestration**: Pretraining, SFT, LoRA/DoRA, knowledge distillation
+- **Parallelism abstraction**: TP/PP/VP/CP/EP without manual sharding code
+- **Fault tolerance**: In-process restart, async checkpointing, straggler detection
+- **Mixed precision**: FP8, MXFP8, FP4, BF16 with adaptive scaling
+
+## Supported Models
+
+**Text Models**: Llama (2/3/3.1/3.2), Gemma (1/2/3), Qwen (1.5/2/2.5/3), Mistral, Ministral, DeepSeek, GLM, Kimi, Nemotron, Llama-Nemotron, OLMoE
+
+**Vision-Language Models**: Qwen-VL, Nemotron-VL, Gemma3-VL, GLM-VL
+
+## When to Use Megatron Bridge
+
+**Use Megatron Bridge when:**
+- Training at multi-node scale where HuggingFace Trainer becomes a bottleneck
+- You need TP/PP/CP parallelism (HuggingFace only does FSDP/DP)
+- Starting from HuggingFace checkpoints but need Megatron Core performance
+- You want NVIDIA's production-tested recipes rather than tuning from scratch
+
+**Consider alternatives when:**
+- Single-GPU or small-scale training (HuggingFace Trainer is simpler)
+- You're already deep in Megatron-LM ecosystem (use that directly)
+- You need models not yet bridged (check `src/megatron/bridge/models/`)
 
 ## Common Commands
 
@@ -242,6 +268,26 @@ Megatron Bridge supports multiple parallelism strategies that can be combined:
 
 **Transformation strategies**: DirectMapping, ColumnParallelMapping, RowParallelMapping, QKVMapping, GatedMLPMapping, AutoMapping (auto-detects based on module type).
 
+### 7. Data Infrastructure
+
+The data pipeline supports multiple sources with distributed loading:
+
+- **HuggingFace datasets**: Load directly from HF Hub or local paths via dataset builders
+- **Energon**: Integration with NVIDIA's Energon library for large-scale data
+- **Data blending**: Combine multiple datasets with configurable ratios
+- **Packed sequences**: Efficient packing for variable-length inputs
+- **VLM datasets**: Specialized loaders for vision-language model training
+
+### 8. Fault Tolerance
+
+For long-running distributed training, Megatron Bridge integrates with `nvidia-resiliency-ext`:
+
+- **In-process restart**: Recover from transient failures without restarting the job
+- **Async checkpointing**: Non-blocking saves to minimize training interruption
+- **Straggler detection**: Identify slow ranks that degrade overall throughput
+
+This is critical for multi-day training runs where hardware failures are expected.
+
 ## Key Code Locations
 
 ### Bridge Infrastructure
@@ -275,6 +321,29 @@ Megatron Bridge supports multiple parallelism strategies that can be combined:
 - `examples/conversion/` - Checkpoint conversion examples
 - `examples/models/` - Model-specific training examples
 - `tutorials/recipes/llama/` - Step-by-step Llama tutorials
+
+### Data Infrastructure
+- `src/megatron/bridge/data/loaders.py` - Distributed data loading with blend management
+- `src/megatron/bridge/data/samplers.py` - Distributed samplers for training
+- `src/megatron/bridge/data/builders/` - HuggingFace and finetuning dataset builders
+- `src/megatron/bridge/data/finetuning.py` - SFT data pipeline with batch preparation
+- `src/megatron/bridge/data/energon/` - Energon data library integration
+- `src/megatron/bridge/data/vlm_datasets/` - Vision-language model datasets
+
+### PEFT (Parameter-Efficient Fine-Tuning)
+- `src/megatron/bridge/peft/lora.py` - LoRA implementation integrated with distributed training
+- `src/megatron/bridge/peft/dora.py` - DoRA (Dimension-wise LoRA) variant
+- `src/megatron/bridge/peft/base.py` - Abstract PEFT base class with model transformation pipeline
+- `src/megatron/bridge/peft/recompute.py` - Gradient recomputation for memory efficiency
+
+### Fault Tolerance and Resilience
+- `src/megatron/bridge/training/fault_tolerance.py` - nvidia-resiliency-ext integration
+- `src/megatron/bridge/training/inprocess_restart.py` - Graceful recovery without job restart
+- `src/megatron/bridge/training/nvrx_straggler.py` - Straggler detection and mitigation
+- `src/megatron/bridge/training/checkpointing.py` - Async checkpointing, fault-tolerant saves
+
+### Inference
+- `src/megatron/bridge/inference/vlm/` - VLM inference controllers and engines
 
 ## Important Implementation Patterns
 
@@ -380,3 +449,26 @@ git commit -m "build: Adding dependencies"
 - **Pre-commit**: Runs ruff linting/formatting, checks end-of-file, trailing whitespace
 - **CI**: Automatically runs if commits are GPG-signed, otherwise comment `/ok to test <commit-SHA>` on PR
 - **DCO**: All commits must be signed-off with `git commit -s` (Developer Certificate of Origin)
+
+## Debugging Tips
+
+**Checkpoint conversion issues:**
+- Run `examples/conversion/compare_models.py` to verify numerical equivalence
+- Check `MappingRegistry` for missing parameter mappings
+- Use `--tp 1 --pp 1` first to isolate conversion from parallelism issues
+
+**Distributed training hangs:**
+- Set `NCCL_DEBUG=INFO` to see collective operations
+- Check for mismatched tensor shapes across ranks
+- Verify all ranks reach the same collective calls
+
+**Memory issues:**
+- Reduce `micro_batch_size` first
+- Enable activation checkpointing via `recompute_granularity`
+- Try `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+- For conversion: use streaming mode to avoid loading full checkpoint into memory
+
+**Recipe debugging:**
+- Print the `ConfigContainer` to see all resolved settings
+- Override specific configs via CLI: `train.train_iters=10` for quick iteration
+- Use `--local` with `launch_with_nemo_run.py` for single-node testing before scaling
